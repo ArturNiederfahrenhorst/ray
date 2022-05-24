@@ -4,7 +4,7 @@ from typing import Optional, Any
 
 from ray.rllib.policy.sample_batch import SampleBatch
 from ray.rllib.utils import deprecation_warning
-from ray.rllib.utils.annotations import DeveloperAPI
+from ray.rllib.utils.annotations import DeveloperAPI, PublicAPI
 from ray.rllib.utils.deprecation import DEPRECATED_VALUE
 from ray.rllib.utils.from_config import from_config
 from ray.rllib.utils.metrics.learner_info import LEARNER_STATS_KEY
@@ -20,13 +20,13 @@ from ray.util import log_once
 logger = logging.getLogger(__name__)
 
 
+@PublicAPI
 def update_priorities_in_replay_buffer(
     replay_buffer: ReplayBuffer,
     config: TrainerConfigDict,
     train_batch: SampleBatchType,
     train_results: ResultDict,
 ) -> None:
-
     """Updates the priorities in a prioritized replay buffer, given training results.
 
     The `abs(TD-error)` from the loss (inside `train_results`) is used as new
@@ -97,6 +97,7 @@ def update_priorities_in_replay_buffer(
         replay_buffer.update_priorities(prio_dict)
 
 
+@PublicAPI
 def sample_min_n_steps_from_buffer(
     replay_buffer: ReplayBuffer, min_steps: int, count_by_agent_steps: bool
 ) -> Optional[SampleBatchType]:
@@ -279,6 +280,7 @@ def validate_buffer_config(config: dict):
             )
 
 
+@DeveloperAPI
 def warn_replay_buffer_capacity(*, item: SampleBatchType, capacity: int) -> None:
     """Warn if the configured replay buffer capacity is too large for machine's memory.
 
@@ -314,6 +316,7 @@ def warn_replay_buffer_capacity(*, item: SampleBatchType, capacity: int) -> None
             logger.info(msg)
 
 
+@DeveloperAPI
 def patch_buffer_with_fake_sampling_method(
     buffer: ReplayBuffer, fake_sample_output: SampleBatchType
 ) -> None:
