@@ -1,7 +1,7 @@
 import unittest
 
 import ray
-from ray.rllib.algorithms import sac
+from ray.rllib.algorithms import cql
 from ray.rllib.utils.framework import try_import_tf, try_import_torch
 from ray.rllib.utils.test_utils import check_compute_single_action, framework_iterator
 
@@ -9,7 +9,7 @@ tf1, tf, tfv = try_import_tf()
 torch, nn = try_import_torch()
 
 
-class TestRNNSAC(unittest.TestCase):
+class TestRNNCQL(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         ray.init()
@@ -18,10 +18,10 @@ class TestRNNSAC(unittest.TestCase):
     def tearDownClass(cls) -> None:
         ray.shutdown()
 
-    def test_rnnsac_compilation(self):
-        """Test whether a RNNSACTrainer can be built on all frameworks."""
+    def test_rnncql_compilation(self):
+        """Test whether a RNNCQL can be built on all frameworks."""
         config = (
-            sac.RNNSACConfig()
+            cql.RNNCQLConfig()
             .rollouts(num_rollout_workers=0)
             .training(
                 # Wrap with an LSTM and use a very simple base-model.
@@ -50,7 +50,7 @@ class TestRNNSAC(unittest.TestCase):
         )
         num_iterations = 1
 
-        # Test building an RNNSAC agent in all frameworks.
+        # Test building an RNNCQL agent in all frameworks.
         for _ in framework_iterator(config, frameworks="torch"):
             trainer = config.build(env="CartPole-v0")
             for i in range(num_iterations):
