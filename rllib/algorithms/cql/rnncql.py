@@ -1,11 +1,8 @@
-from typing import Type, Optional
+from typing import Type
 
 from ray.rllib.algorithms.sac.rnnsac_torch_policy import RNNSACTorchPolicy
-from ray.rllib.algorithms.cql.cql import CQLConfig
+from ray.rllib.algorithms.cql.cql import CQLConfig, CQLTrainer
 from ray.rllib.algorithms.sac.rnnsac import RNNSACConfig, RNNSACTrainer
-from ray.rllib.algorithms.sac.sac import (
-    SACConfig,
-)
 from ray.rllib.execution.train_ops import (
     multi_gpu_train_one_step,
     train_one_step,
@@ -27,7 +24,7 @@ from ray.rllib.utils.metrics import (
 )
 from ray.rllib.utils.replay_buffers.utils import update_priorities_in_replay_buffer
 from ray.rllib.utils.typing import ResultDict, TrainerConfigDict
-
+from ray.rllib.utils.replay_buffers.utils import sample_min_n_steps_from_buffer
 
 
 class RNNCQLConfig(RNNSACConfig, CQLConfig):
@@ -44,37 +41,54 @@ class RNNCQLConfig(RNNSACConfig, CQLConfig):
     """
 
     def __init__(self, trainer_class=None):
-        RNNSACConfig.__init__(self, trainer_class=trainer_class or RNNSACTrainer)
-        CQLConfig.__init__(self, trainer_class=trainer_class or RNNSACTrainer)
+        CQLConfig.__init__(self, trainer_class=trainer_class or RNNCQLTrainer)
+        RNNSACConfig.__init__(self, trainer_class=trainer_class or RNNCQLTrainer)
+        self.replay_buffer_config = {
+            "_enable_replay_buffer_api": True,
+            "type": "MultiAgentReplayBuffer",
+            "capacity": int(1e6),
+            # How many steps of the model to sample before learning starts.
+            "learning_starts": 0,
+            # This algorithm learns on sequences. We therefore require the replay buffer
+            # to slice sampled batches into sequences before replay. How sequences
+            # are sliced depends on the parameters `replay_sequence_length`,
+            # `replay_burn_in`, and `replay_zero_init_states`.
+            "storage_unit": "sequences",
+            # If > 0, use the `burn_in` first steps of each replay-sampled sequence
+            # (starting either from all 0.0-values if `zero_init_state=True` or
+            # from the already stored values) to calculate an even more accurate
+            # initial states for the actual sequence (starting after this burn-in
+            # window). In the burn-in case, the actual length of the sequence
+            # used for loss calculation is `n - burn_in` time steps
+            # (n=LSTM’s/attention net’s max_seq_len).
+            "replay_burn_in": 0,
+            # Set automatically: The number of contiguous environment steps to
+            # replay at once. Will be calculated via
+            # model->max_seq_len + burn_in.
+            # Do not set this to any valid value!
+            "replay_sequence_length": -1,
+        }
 
-
-    @override(SACConfig)
+    @override(RNNSACConfig)
     def training(
         self,
-        *,
-        zero_init_states: Optional[bool] = None,
         **kwargs,
-    ) -> "RNNSACConfig":
+    ) -> "RNNCQLConfig":
         """Sets the training related configuration.
-
-        Args:
-            zero_init_states: If True, assume a zero-initialized state input (no matter
-                where in the episode the sequence is located).
-                If False, store the initial states along with each SampleBatch, use
-                it (as initial state when running through the network for training),
-                and update that initial state during training (from the internal
-                state outputs of the immediately preceding sequence).
 
         Returns:
             This updated TrainerConfig object.
         """
-        RNNSACConfig.training(**kwargs)
-        CQLConfig.training(**kwargs)
+        RNNSACConfig.training(self, **kwargs)
+        CQLConfig.training(self, **kwargs)
 
         return self
 
 
-class RNNCQLTrainer(RNNSACTrainer):
+class RNNCQLTrainer(RNNSACTrainer, CQLTrainer):
+    def __init__(self, *args, **kwargs):
+        CQLTrainer.__init__(self, *args, **kwargs)
+
     @classmethod
     @override(RNNSACTrainer)
     def get_default_config(cls) -> TrainerConfigDict:
@@ -108,7 +122,6 @@ class RNNCQLTrainer(RNNSACTrainer):
         if config["simple_optimizer"] is not True and config["framework"] == "torch":
             config["simple_optimizer"] = True
 
-
     @override(RNNSACTrainer)
     def get_default_policy_class(self, config: TrainerConfigDict) -> Type[Policy]:
         return RNNSACTorchPolicy
@@ -117,11 +130,19 @@ class RNNCQLTrainer(RNNSACTrainer):
     def training_iteration(self) -> ResultDict:
 
         # Sample training batch from replay buffer.
-        train_batch = self.local_replay_buffer.sample(self.config["train_batch_size"])
+        train_batch = sample_min_n_steps_from_buffer(
+            self.local_replay_buffer,
+            self.config["train_batch_size"],
+            count_by_agent_steps=self._by_agent_steps,
+        )
 
         # Old-style replay buffers return None if learning has not started
         if not train_batch:
             return {}
+
+        state_in = self.get_policy("default_policy").model.get_initial_state()
+        for state_idx, s in enumerate(state_in):
+            train_batch.policy_batches["default_policy"]["state_in_{}".format(state_idx)] = s
 
         # Postprocess batch before we learn on it.
         post_fn = self.config.get("before_learn_on_batch") or (lambda b, *a: b)

@@ -83,6 +83,12 @@ def _import_cql():
     return cql.CQLTrainer, cql.DEFAULT_CONFIG
 
 
+def _import_rnncql():
+    from ray.rllib.algorithms import cql
+
+    return cql.RNNCQLTrainer, cql.RNNCQLConfig
+
+
 def _import_ddpg():
     from ray.rllib.algorithms import ddpg
 
@@ -210,6 +216,7 @@ ALGORITHMS = {
     "BanditLinUCB": _import_bandit_linucb,
     "BC": _import_bc,
     "CQL": _import_cql,
+    "RNNCQL": _import_rnncql,
     "ES": _import_es,
     "DDPG": _import_ddpg,
     "DDPPO": _import_ddppo,
