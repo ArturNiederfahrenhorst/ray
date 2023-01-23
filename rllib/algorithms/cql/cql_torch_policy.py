@@ -38,6 +38,7 @@ from ray.rllib.utils.torch_utils import (
 )
 
 torch, nn = try_import_torch()
+
 F = nn.functional
 
 logger = logging.getLogger(__name__)
@@ -133,10 +134,6 @@ def cql_loss(
     alpha_loss = -(model.log_alpha * (log_pis_t + model.target_entropy).detach()).mean()
 
     batch_size = tree.flatten(obs)[0].shape[0]
-    if batch_size == policy.config["train_batch_size"]:
-        policy.alpha_optim.zero_grad()
-        alpha_loss.backward()
-        policy.alpha_optim.step()
 
     # Policy Loss (Either Behavior Clone Loss or SAC Loss)
     alpha = torch.exp(model.log_alpha)
@@ -150,11 +147,6 @@ def cql_loss(
         bc_logp = action_dist_t.logp(actions)
         actor_loss = (alpha.detach() * log_pis_t - bc_logp).mean()
         # actor_loss = -bc_logp.mean()
-
-    if batch_size == policy.config["train_batch_size"]:
-        policy.actor_optim.zero_grad()
-        actor_loss.backward(retain_graph=True)
-        policy.actor_optim.step()
 
     # Critic Loss (Standard SAC Critic L2 Loss + CQL Entropy Loss)
     # SAC Loss:
@@ -269,16 +261,6 @@ def cql_loss(
     if twin_q:
         critic_loss.append(critic_loss_2 + min_qf2_loss)
 
-    if batch_size == policy.config["train_batch_size"]:
-        policy.critic_optims[0].zero_grad()
-        critic_loss[0].backward(retain_graph=True)
-        policy.critic_optims[0].step()
-
-        if twin_q:
-            policy.critic_optims[1].zero_grad()
-            critic_loss[1].backward(retain_graph=False)
-            policy.critic_optims[1].step()
-
     # Store values for stats function in model (tower), such that for
     # multi-GPU, we do not override them during the parallel loss phase.
     # SAC stats.
@@ -302,11 +284,6 @@ def cql_loss(
         model.tower_stats["log_alpha_prime_value"] = model.log_alpha_prime[0]
         model.tower_stats["alpha_prime_value"] = alpha_prime
         model.tower_stats["alpha_prime_loss"] = alpha_prime_loss
-
-        if batch_size == policy.config["train_batch_size"]:
-            policy.alpha_prime_optim.zero_grad()
-            alpha_prime_loss.backward()
-            policy.alpha_prime_optim.step()
 
     # Return all loss terms corresponding to our optimizers.
     return tuple(
