@@ -395,6 +395,38 @@ class TestLearnerGroupUpdatePlan(unittest.TestCase):
         finally:
             learner_group.shutdown()
 
+    def test_max_reduction_leaves_no_shard_untrained(self):
+        """`minibatch_count_reduction="max"` trains every shard's data in full.
+
+        Averaging the proposals covers the group's batch `num_epochs` times but
+        leaves part of the largest shard untrained. Environments whose long episodes
+        only make sense in full cannot afford that, and trade it for the smaller
+        shards cycling through their data more than once.
+        """
+        config = (
+            BaseTestingAlgorithmConfig()
+            .update_from_dict(REMOTE_CONFIGS["multi-cpu-ddp"])
+            .learners(minibatch_count_reduction="max")
+        )
+        learner_group = config.build_learner_group(env=gym.make("CartPole-v1"))
+        try:
+            # On their own the Learners would step ceil(256/32) = 8 and
+            # ceil(64/32) = 2 times. The group takes the larger, so the 256-row shard
+            # sees all of its rows instead of the 160 the average would have allowed.
+            results = MetricsLogger.peek_results(
+                learner_group.update(
+                    batches=[fake_batch(256), fake_batch(64)],
+                    minibatch_size=32,
+                    num_epochs=1,
+                )
+            )
+            self.assertEqual(
+                [8 * 32, 8 * 32],
+                [result[ALL_MODULES][NUM_MODULE_STEPS_TRAINED] for result in results],
+            )
+        finally:
+            learner_group.shutdown()
+
 
 class TestLearnerGroupCheckpointRestore(unittest.TestCase):
     @classmethod

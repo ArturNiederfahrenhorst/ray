@@ -20,6 +20,7 @@ class MiniBatchIteratorBase:
         shuffle_batch_per_epoch: bool = True,
         minibatch_size: int,
         num_total_minibatches: int = 0,
+        start_offset: int = 0,
     ) -> None:
         """Initializes a MiniBatchIteratorBase instance.
 
@@ -38,6 +39,10 @@ class MiniBatchIteratorBase:
                 `MiniBatchCyclicIterator.num_minibatches`. Multi-Learner setups agree
                 on one value and pass it explicitly, so that Learners holding
                 differently sized shards still step the same number of times.
+            start_offset: Counter (e.g. of `update()` calls) that moves where a run
+                begins in a module's data when it cannot cover all of it. Without it,
+                the same rows go untrained on every call; see
+                `MiniBatchCyclicIterator`.
         """
         pass
 
@@ -51,6 +56,10 @@ class MiniBatchCyclicIterator(MiniBatchIteratorBase):
     cycling through the batch as needed. It yields exactly `num_total_minibatches`
     minibatches; when that is not given, it yields as many as it takes to cover
     every module's data `num_epochs` times.
+
+    When the count is too small to cover a module, `start_offset` decides where in
+    that module's data the run begins, so that repeated calls do not keep training
+    the same rows and dropping the same ones.
     """
 
     def __init__(
@@ -61,6 +70,7 @@ class MiniBatchCyclicIterator(MiniBatchIteratorBase):
         minibatch_size: int,
         shuffle_batch_per_epoch: bool = True,
         num_total_minibatches: int = 0,
+        start_offset: int = 0,
     ) -> None:
         """Initializes a MiniBatchCyclicIterator instance."""
         super().__init__(
@@ -81,6 +91,22 @@ class MiniBatchCyclicIterator(MiniBatchIteratorBase):
         self._num_total_minibatches = num_total_minibatches or self.num_minibatches(
             batch, minibatch_size=minibatch_size, num_epochs=num_epochs
         )
+
+        # A run that cannot cover a module's data leaves rows untrained -- and always
+        # the same ones: `__iter__` starts at 0, and the only shuffle happens where it
+        # wraps around, which such a run never reaches (with `num_epochs` == 1 nothing
+        # shuffles at all). Begin where the previous call left off instead, so the
+        # window that goes unseen walks through the data rather than being its tail
+        # forever. Reached when several Learners agree on a count that is smaller than
+        # this shard implies, or when the caller fixes `num_total_minibatches`.
+        if start_offset:
+            for module_id, module_batch in batch.policy_batches.items():
+                if len(module_batch) == 0:
+                    continue
+                n, step = self._len_and_step(module_batch, minibatch_size)
+                covered = self._num_total_minibatches * step
+                if covered < n:
+                    self._start[module_id] = (start_offset * covered) % n
 
     @classmethod
     def num_minibatches(

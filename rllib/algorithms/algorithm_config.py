@@ -380,6 +380,7 @@ class AlgorithmConfig(_Config):
         #  an async algo, remove this restriction entirely.
         self.max_requests_in_flight_per_learner = 3
         self.never_skip_update = False
+        self.minibatch_count_reduction = "mean"
 
         # `self.training()`
         self.gamma = 0.99
@@ -2307,6 +2308,7 @@ class AlgorithmConfig(_Config):
         local_gpu_idx: Optional[int] = NotProvided,
         max_requests_in_flight_per_learner: Optional[int] = NotProvided,
         never_skip_update: Optional[bool] = NotProvided,
+        minibatch_count_reduction: Optional[str] = NotProvided,
         learner_class: Optional[Type["Learner"]] = NotProvided,
         learner_connector: Optional[
             Callable[
@@ -2379,6 +2381,18 @@ class AlgorithmConfig(_Config):
                 per-update overhead. Applies to `Learner`; a `DifferentiableLearner`
                 computes its inner updates without a collective and always skips an
                 empty one.
+            minibatch_count_reduction: How Learners settle on the number of
+                minibatches to step through when their shards imply different
+                numbers (only relevant with `num_learners > 1` and `minibatch_size`
+                set). "mean" (the default) takes the average of what the Learners
+                propose, so the group covers its train batch `num_epochs` times, at
+                the cost of leaving part of the largest shard untrained. "max" takes
+                the largest proposal, so no Learner leaves data untrained; the
+                smaller shards cycle through theirs more than once instead. Prefer
+                "max" when individual episodes carry information you cannot afford
+                to see only in part, e.g. long episodes whose behavior matters as a
+                whole; prefer "mean" when the number of gradient steps per unit of
+                fresh data is what you tune.
             learner_class: The `Learner` class to use for (distributed) updating of the
                 RLModule.
             learner_connector: A callable taking an env observation space and an env
@@ -2436,6 +2450,13 @@ class AlgorithmConfig(_Config):
             self.max_requests_in_flight_per_learner = max_requests_in_flight_per_learner
         if never_skip_update is not NotProvided:
             self.never_skip_update = never_skip_update
+        if minibatch_count_reduction is not NotProvided:
+            if minibatch_count_reduction not in ["mean", "max"]:
+                raise ValueError(
+                    f"`minibatch_count_reduction` ({minibatch_count_reduction}) must "
+                    "be one of: 'mean' or 'max'!"
+                )
+            self.minibatch_count_reduction = minibatch_count_reduction
         if learner_class is not NotProvided:
             self._learner_class = learner_class
         if learner_connector is not NotProvided:

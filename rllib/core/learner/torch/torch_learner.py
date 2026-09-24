@@ -539,20 +539,36 @@ class TorchLearner(Learner):
             or not torch.distributed.is_initialized()
         ):
             return plan
-        summed = torch.tensor(
+        # Both reductions answer "does anyone want to skip?" with the same OR over
+        # the 0/1 flag, so either op carries both fields in one collective.
+        take_max = self.config.minibatch_count_reduction == "max"
+        reduced = torch.tensor(
             [int(plan.skip), plan.num_minibatches],
             dtype=torch.int64,
             device=self._device,
         )
-        torch.distributed.all_reduce(summed)
-        num_skipping, total_minibatches = summed.tolist()
-        # Skip if anyone wants to. Steps: the average proposal. Every non-empty
-        # Learner proposes at least 1 when there is minibatching, so the floor is
-        # >= 1 then; a single pass over the batch proposes 0 on every Learner, and 0
-        # ("uncapped") is the right answer -- there is only ever one step to take.
+        torch.distributed.all_reduce(
+            reduced,
+            op=(
+                torch.distributed.ReduceOp.MAX
+                if take_max
+                else torch.distributed.ReduceOp.SUM
+            ),
+        )
+        num_skipping, minibatches = reduced.tolist()
+        # Steps: the largest proposal, so that no Learner leaves data untrained; or
+        # their average, so that the group covers its batch `num_epochs` times. Every
+        # non-empty Learner proposes at least 1 when there is minibatching, so the
+        # floor is >= 1 then; a single pass over the batch proposes 0 on every
+        # Learner, and 0 ("uncapped") is the right answer under either reduction --
+        # there is only ever one step to take.
         return UpdatePlan(
             skip=num_skipping > 0,
-            num_minibatches=total_minibatches // torch.distributed.get_world_size(),
+            num_minibatches=(
+                minibatches
+                if take_max
+                else minibatches // torch.distributed.get_world_size()
+            ),
         )
 
     @OverrideToImplementCustomLogic

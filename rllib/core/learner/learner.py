@@ -1377,6 +1377,9 @@ class Learner(Checkpointable):
                 minibatch_size=minibatch_size,
                 shuffle_batch_per_epoch=shuffle_batch_per_epoch and (num_epochs > 1),
                 num_total_minibatches=num_total_minibatches,
+                # Moves the part of a shard that an agreed-on count cannot cover,
+                # rather than dropping its tail on every update.
+                start_offset=self._weights_seq_no,
             )
         return batch_iter
 
@@ -1424,7 +1427,8 @@ class Learner(Checkpointable):
         operation and must stay one.
 
         The plans are combined as follows: the group skips if ANY Learner wants to;
-        the number of minibatches is the average of the Learners' proposals.
+        the number of minibatches is the average of the Learners' proposals, or the
+        largest of them under `config.minibatch_count_reduction="max"`.
 
         Args:
             plan: This Learner's own proposal, derived from its own train batch.

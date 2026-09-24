@@ -110,6 +110,44 @@ def test_explicit_num_total_minibatches_wins():
     assert 3 == len(minibatches)
 
 
+def test_start_offset_moves_the_window_that_goes_untrained():
+    """A run too short to cover the data must not drop the same rows every time.
+
+    `__iter__` begins at index 0 and shuffles only where it wraps around, which a run
+    this short never reaches -- so without an offset the same tail is left out of
+    every update.
+    """
+
+    def covered(offset):
+        batch = MultiAgentBatch(
+            {"p0": SampleBatch({"obs": np.arange(100, dtype=np.float32)})},
+            env_steps=100,
+        )
+        iterator = MiniBatchCyclicIterator(
+            batch,
+            num_epochs=1,
+            minibatch_size=32,
+            shuffle_batch_per_epoch=False,
+            num_total_minibatches=2,
+            start_offset=offset,
+        )
+        rows = np.concatenate(
+            [minibatch.policy_batches["p0"]["obs"] for minibatch in iterator]
+        )
+        return set(rows.astype(int).tolist())
+
+    # Two minibatches of 32 take 64 of the 100 rows, and with no offset they are the
+    # same 64 rows on every call: rows 64-99 never take part in an update.
+    assert set(range(64)) == covered(0)
+    # With one, the run starts where the last one stopped, so the rows left out move
+    # and four consecutive updates touch every row at least once.
+    assert set(range(64, 100)) | set(range(28)) == covered(1)
+    seen = set()
+    for offset in range(4):
+        seen |= covered(offset)
+    assert set(range(100)) == seen
+
+
 @pytest.mark.parametrize(
     "num_rows, num_shards, expected",
     [
